@@ -1,0 +1,7 @@
+tunnel: a4792331-8186-4a96-bc6e-2b1c538f10f4
+credentials-file: /opt/svc-inference/tunnel-cred.json
+
+ingress:
+  - hostname: infer.ai-song.cc
+    service: http://localhost:8081
+  - service: http_status:404

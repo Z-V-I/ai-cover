@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 翻唱 - So-VITS-SVC</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="css/style.css">
+    <script type="text/javascript">
+        (function(c,l,a,r,i,t,y){
+            c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+            t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+            y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+        })(window, document, "clarity", "script", "xu1txko1ug");
+    </script>
+    <script>window.API_BASE = '';</script>
+</head>
+<body>
+
+    <div class="modal-overlay" id="noticeModal">
+        <div class="modal-box">
+            <h3>使用须知</h3>
+            <ol>
+                <li>上传的音频必须为<strong>纯人声（英文）</strong>，不能包含背景伴奏。系统是将一个人的声音替换为另一个人的声音，伴奏会导致转换失败。</li>
+                <li>两个模型（2602 / DASA）均基于<strong>英文歌曲人声</strong>训练，非英文或含伴奏的输入不支持。</li>
+                <li>3 分钟音频预计处理时间 <strong>30~60 秒</strong>。</li>
+            </ol>
+            <button class="modal-btn" onclick="document.getElementById('noticeModal').style.display='none'">我知道了</button>
+        </div>
+    </div>
+
+    <nav class="navbar">
+        <div class="nav-container">
+            <span class="nav-logo">AI 翻唱</span>
+            <div class="nav-status" id="serverStatus">
+                <span class="status-dot"></span>
+                <span class="status-text">检查中...</span>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-container">
+        <section class="hero-section">
+            <h1>AI 歌声音色转换</h1>
+            <p class="hero-subtitle">上传纯人声英文歌曲，选择目标音色，即刻生成 AI 翻唱</p>
+        </section>
+
+        <section class="queue-bar" id="queueBar">
+            <div class="queue-info">
+                <span class="queue-label">系统状态</span>
+                <span class="queue-value" id="queueStatus">排队: <strong id="queueCount">0</strong>/20 | 处理中: <strong id="activeCount">0</strong></span>
+            </div>
+            <div class="queue-indicator"><div class="queue-fill" id="queueFill" style="width:0%"></div></div>
+        </section>
+
+        <section class="model-section">
+            <h2 class="section-title">选择目标音色</h2>
+            <div class="model-cards" id="modelCards"><div class="model-card loading">加载中...</div></div>
+        </section>
+
+        <section class="upload-section">
+            <h2 class="section-title">上传音频</h2>
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-content">
+                    <p class="upload-text">拖拽文件到此处，或<span class="upload-link">点击上传</span></p>
+                    <p class="upload-hint">支持 WAV / MP3 / FLAC / OGG / M4A / 最大 60 MB / 仅限英文人声</p>
+                </div>
+                <input type="file" id="fileInput" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac" hidden>
+            </div>
+
+            <div class="file-info" id="fileInfo" style="display:none">
+                <div class="file-card">
+                    <div class="file-details">
+                        <div class="file-name" id="fileName">-</div>
+                        <div class="file-meta"><span id="fileSize">-</span><span id="fileDuration">-</span></div>
+                    </div>
+                    <button class="btn-remove" id="btnRemove" title="移除文件">&times;</button>
+                </div>
+            </div>
+
+            <div class="params-section" id="paramsSection" style="display:none">
+                <div class="param-row">
+                    <label class="param-label">音高调整 <span class="param-tip">（-12 至 +12 半音）</span></label>
+                    <div class="pitch-control">
+                        <button class="pitch-btn" id="pitchDown">&minus;</button>
+                        <span class="pitch-value" id="pitchValue">0</span>
+                        <button class="pitch-btn" id="pitchUp">+</button>
+                        <input type="range" id="pitchSlider" min="-12" max="12" value="0" class="pitch-slider">
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn-submit" id="btnSubmit" disabled>开始生成 AI 翻唱</button>
+            <div class="error-msg" id="errorMsg" style="display:none"></div>
+        </section>
+
+        <section class="status-section" id="statusSection" style="display:none">
+            <h2 class="section-title">处理状态</h2>
+            <div class="status-card" id="statusCard">
+                <div class="status-header">
+                    <div class="status-badge" id="statusBadge">排队中</div>
+                    <div class="status-model" id="statusModel">-</div>
+                </div>
+                <div class="stage-list">
+                    <div class="stage" id="stageUpload"><span class="stage-dot"></span>正在上传至服务器</div>
+                    <div class="stage" id="stageQueue"><span class="stage-dot"></span>排队等待中</div>
+                    <div class="stage" id="stageInfer"><span class="stage-dot"></span>GPU 推理中</span></div>
+                    <div class="stage" id="stageReturn"><span class="stage-dot"></span>正在传回结果</div>
+                </div>
+                <div class="status-details">
+                    <div class="detail-item"><span class="detail-label">排队位置</span><span class="detail-value" id="detailPosition">-</span></div>
+                    <div class="detail-item"><span class="detail-label">任务ID</span><span class="detail-value" id="detailTaskId">-</span></div>
+                </div>
+            </div>
+            <div class="download-section" id="downloadSection" style="display:none">
+                <p class="success-text">AI 翻唱已生成！</p>
+                <a class="btn-download" id="btnDownload" href="#" download>下载音频</a>
+                <button class="btn-retry" id="btnRetry">再来一首</button>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>&copy; 2026 zvi &middot; <a href="mailto:zviman888@163.com">zviman888@163.com</a></p>
+        <div class="footer-credits">
+            <div class="credit-item"><img src="/img/zvi.jpg" alt="zvi"><span>Developer</span></div>
+            <div class="credit-item"><img src="/img/2602.jpg" alt="2602"><span>2602 Model</span></div>
+            <div class="credit-item"><img src="/img/dasa.jpg" alt="DASA"><span>DASA Model</span></div>
+        </div>
+    </footer>
+
+    <div class="toast-container" id="toastContainer"></div>
+    <script src="js/app.js"></script>
+</body>
+</html>
