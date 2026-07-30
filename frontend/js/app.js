@@ -4,6 +4,13 @@
 
 const API_BASE = window.API_BASE || '';
 const POLL_INTERVAL = 2000;
+const API_TOKEN = 'aicover-api-key-2026';
+
+function apiFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    options.headers['X-API-Token'] = API_TOKEN;
+    return fetch(API_BASE + url, options);
+}
 
 let appState = { selectedModel: null, selectedFile: null, fileDuration: null, currentTaskId: null, pollTimer: null, models: [] };
 
@@ -19,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 async function checkServerHealth() {
     try {
-        const res = await fetch(`${API_BASE}/api/health`);
+        const res = await apiFetch('/api/health');
         const data = await res.json();
         updateServerStatus(true, data);
         updateQueueBar(data);
@@ -51,7 +58,7 @@ function updateQueueBar(data) {
 
 async function loadModels() {
     try {
-        const res = await fetch(`${API_BASE}/api/models`);
+        const res = await apiFetch('/api/models');
         const data = await res.json();
         appState.models = data.models || [];
         renderModels(data.models || []);
@@ -158,7 +165,7 @@ async function submitTask() {
     fd.append('pitch_shift', $('#pitchSlider').value);
 
     try {
-        const res = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: fd });
+        const res = await apiFetch('/api/upload', { method: 'POST', body: fd });
         const data = await res.json();
 
         if (res.status === 429) { showError('排队人数已满，请稍后再试。'); resetSubmitBtn(); setStage('stageUpload', ''); return; }
@@ -212,9 +219,9 @@ function stopPolling() {
 
 async function pollTaskStatus() {
     if (!appState.currentTaskId) return;
-    try { const h = await fetch(`${API_BASE}/api/health`); if (h.ok) updateQueueBar(await h.json()); } catch (e) {}
+    try { const h = await apiFetch('/api/health'); if (h.ok) updateQueueBar(await h.json()); } catch (e) {}
     try {
-        const res = await fetch(`${API_BASE}/api/status/${appState.currentTaskId}`);
+        const res = await apiFetch('/api/status/' + appState.currentTaskId);
         const data = await res.json();
 
         // 按顺序点亮阶段，不跳过

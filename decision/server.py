@@ -26,6 +26,7 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 
 from config import (
+    API_TOKEN,
     MAX_QUEUE_SIZE,
     MAX_CONCURRENT,
     MAX_FILE_SIZE_BYTES,
@@ -349,6 +350,16 @@ def call_inference_service(file_path: str, voice_model: str, pitch_shift: int, t
 # ============================================
 # API 路由
 # ============================================
+
+@app.before_request
+def check_auth():
+    """Token 认证（/api/health 除外）"""
+    if request.path == '/api/health':
+        return None
+    if request.path.startswith('/api/'):
+        token = request.headers.get('X-API-Token', '')
+        if token != API_TOKEN:
+            return jsonify({"error": "Unauthorized"}), 401
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
