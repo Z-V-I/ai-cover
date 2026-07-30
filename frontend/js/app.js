@@ -212,18 +212,20 @@ function stopPolling() {
 
 async function pollTaskStatus() {
     if (!appState.currentTaskId) return;
-    // 同时更新队列状态，确保实时同步
     try { const h = await fetch(`${API_BASE}/api/health`); if (h.ok) updateQueueBar(await h.json()); } catch (e) {}
     try {
         const res = await fetch(`${API_BASE}/api/status/${appState.currentTaskId}`);
         const data = await res.json();
 
-        if (data.status === 'processing') {
+        // 按顺序点亮阶段，不跳过
+        if (data.status === 'pending') {
+            // 仍在排队
+        } else if (data.status === 'processing') {
             setStage('stageQueue', 'done');
             setStage('stageInfer', 'active');
-            updateStatusBadge('推理中', 'status-processing');
+            updateStatusBadge('传输+推理中', 'status-processing');
         } else if (data.status === 'completed') {
-            stopPolling();
+            setStage('stageQueue', 'done');
             setStage('stageInfer', 'done');
             setStage('stageReturn', 'active');
             updateStatusBadge('已完成', 'status-completed');

@@ -474,20 +474,25 @@ def upload_audio():
     logger.info(f"收到上传: task_id={task_id}, model={voice_model}, "
                 f"file={file.filename}, size={file_size/1024/1024:.1f}MB, duration={duration:.1f}s")
     
-    # ---- 7. 检查队列容量 ----
-    if not can_accept_new_task():
-        # 删除文件
-        try:
-            os.remove(save_path)
-        except:
-            pass
-        return jsonify({
-            "error": "当前排队人数已满，请稍后再来！",
-            "code": "QUEUE_FULL",
-            "retry_after": 30  # 建议30秒后重试
-        }), 429  # HTTP 429 Too Many Requests
+    # ---- 7. 检查队列容量 + 入队（原子操作，防并发绕过） ----
+    with queue_lock:
+        with active_lock:
+            total = len(task_queue) + active_count
+        if total >= MAX_QUEUE_SIZE:
+            try:
+                os.remove(save_path)
+            except:
+                pass
+            return jsonify({
+                "error": "当前排队人数已满，请稍后再来！",
+                "code": "QUEUE_FULL",
+                "retry_after": 30
+            }), 429
+        
+        task_queue.append(task_id)
+        position = len(task_queue)
     
-    # ---- 8. 创建任务并入队 ----
+    # ---- 8. 创建任务 ----
     task_info = {
         "task_id": task_id,
         "status": "pending",
@@ -508,11 +513,6 @@ def upload_audio():
     
     with tasks_lock:
         tasks_store[task_id] = task_info
-    
-    with queue_lock:
-        task_queue.append(task_id)
-    
-    position = len(task_queue)
     
     logger.info(f"任务 {task_id} 入队，位置: {position}/{MAX_QUEUE_SIZE}，排队人数: {position}")
     
@@ -537,8 +537,8 @@ def upload_audio():
             "model_name": VOICE_MODELS[voice_model]["name"]
         }
     
-    # 尝试立即启动处理
-    try_start_next_task()
+    # 延迟 5 秒启动，让前端有时间轮询显示"排队中"
+    threading.Timer(5.0, try_start_next_task).start()
     
     return jsonify(response_data), 202
 

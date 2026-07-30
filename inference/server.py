@@ -253,4 +253,4 @@ if __name__ == '__main__':
     init_engine()
     logger.info(f"推理层服务启动于端口 {INFERENCE_PORT}")
     logger.info(f"模拟模式: {USE_MOCK}")
-    app.run(host='0.0.0.0', port=INFERENCE_PORT, debug=False, threaded=False)
+    app.run(host='0.0.0.0', port=INFERENCE_PORT, debug=False, threaded=True)
