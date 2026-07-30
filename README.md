@@ -33,6 +33,21 @@ Browser ──HTTPS──▶ Cloudflare ──HTTP──▶ ECS (2C2G) ──frp
 | 2602 | 2602 | 129,600 | 英文 |
 | DASA | 4 | 180,000 | 英文 |
 
+### 模型文件下载
+
+模型文件总计 3.9 GB，需手动下载并解压到 `inference/` 目录：
+
+**[云盘下载](https://1812063966.share.123pan.cn/123pan/kD4rVv-PqflA)**
+
+解压后结构：
+```
+inference/
+├── logs/44k/G_129600.pth  (2602 模型, 599 MB)
+├── logs/44k/G_180000.pth  (DASA 模型, 599 MB)
+├── pretrain/              (ContentVec + HubertSoft + HiFiGAN)
+└── pre_trained_model/     (预训练底模 + 扩散模型)
+```
+
 ---
 
 ## 目录结构
