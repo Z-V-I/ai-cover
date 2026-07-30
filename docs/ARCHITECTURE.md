@@ -30,7 +30,7 @@
                                     │ frp TCP 隧道
                           ┌─────────▼──────────────────────┐
                           │  本机 WSL2 (Ubuntu)             │
-                          │  RTX 3060 12GB                 │
+                          │  NVIDIA GPU                   │
                           │                                │
                           │  frpc → ECS:7000               │
                           │  Flask :8081                   │

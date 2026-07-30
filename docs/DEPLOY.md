@@ -3,7 +3,7 @@
 ## 前置条件
 
 - 一台 ECS (2C2G Debian)
-- 本机 WSL2 + NVIDIA GPU (RTX 3060+)
+- 本机 WSL2 + NVIDIA GPU
 - Cloudflare 账号 + 域名 (zvi.onl)
 - 原项目模型文件 (F:\语音)
 
