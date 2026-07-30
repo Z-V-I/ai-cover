@@ -1,19 +1,13 @@
-# Python
+# Python cache
 __pycache__/
 *.py[cod]
 *.so
-venv/
 *.egg-info/
 
-# Model files (too large, excluded from Git)
-logs/
-pretrain/
-pre_trained_model/
-*.pth
-*.pt
-*.ckpt
+# Virtual environment
+venv/
 
-# Uploads / results
+# Uploads / results (runtime data)
 uploads/
 results/
 
@@ -31,3 +25,7 @@ Thumbs.db
 # Environment
 .env
 *.env.local
+
+# Temp scripts
+push.sh
+*_sg.*
