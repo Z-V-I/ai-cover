@@ -91,10 +91,12 @@ ai-cover/
 ├── frontend/              # 前端页面
 │   ├── index.html         # SPA 单页
 │   ├── css/style.css      # 样式
-│   └── js/app.js          # 逻辑（上传/轮询/下载）
+│   └── js/
+│       ├── app.js             # 逻辑（上传/轮询/下载）
+│       └── config.example.js  # 本地配置模板（复制成 config.js，含 API Token）
 ├── decision/              # 决策层
 │   ├── server.py          # Flask API（校验/排队/转发）
-│   ├── config.py          # 配置（队列上限/文件限制）
+│   ├── config.py          # 配置（队列上限/文件限制/API Token，从环境变量读）
 │   ├── nginx.conf         # Nginx 配置模板
 │   ├── requirements.txt   # Python 依赖
 │   └── deploy.sh          # ECS 一键部署
@@ -110,13 +112,39 @@ ai-cover/
 │   ├── diffusion/         # 浅层扩散模块
 │   ├── inference/         # 原项目推理脚本
 │   ├── configs/           # 模型配置文件
+│   ├── install-wsl.sh     # WSL2 一键安装（分阶段/可续传）
+│   ├── requirements-linux.txt  # Linux 真实推理依赖清单
 │   ├── start_server.sh    # 推理层启动脚本
 │   ├── autostart.sh       # WSL2 开机自启
-│   └── requirements.txt   # Python 依赖
-└── docs/
-    ├── ARCHITECTURE.md    # 架构详解
-    └── DEPLOY.md          # 部署指南
+│   └── wsl-autostart.vbs  # Windows 开机自启（启动文件夹）
+├── skills/                # 可复用的 WorkBuddy Skill
+│   └── wsl2-audio-inference-deploy/
+├── docs/
+│   ├── ARCHITECTURE.md    # 架构详解
+│   ├── DEPLOY.md          # 部署指南（决策层 + 前端）
+│   └── DEPLOY-WSL2.md     # 推理层部署（WSL2，含踩坑记录）
+├── .env.example           # 敏感配置模板（复制成 .env）
+└── README.md
 ```
+
+---
+
+## 配置
+
+仓库里**不含任何真实密钥**。所有敏感值统一放在仓库根目录的 `.env`（已被 `.gitignore` 忽略）：
+
+```bash
+cp .env.example .env
+# 填入 API_TOKEN；要配 frp 内网穿透还要填 ECS_IP / FRP_TOKEN
+```
+
+前端同理：
+
+```bash
+cp frontend/js/config.example.js frontend/js/config.js   # 填 apiToken，须与 API_TOKEN 一致
+```
+
+`API_TOKEN` 缺失时决策层会**拒绝启动**（空 token 会让鉴权形同虚设）。
 
 ---
 
@@ -124,19 +152,19 @@ ai-cover/
 
 ### 推理层 (本机 WSL2)
 
+一键脚本，分阶段可重跑、大下载可断点续传：
+
 ```bash
 cd inference/
-python3.10 -m venv venv
-source venv/bin/activate
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install fairseq soundfile librosa pyworld flask flask-cors
-
-# 解压模型文件到 inference/ 目录
-unzip ai-cover-models.zip -d inference/
-
-# 启动
-USE_MOCK=0 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python3 server.py
+sudo bash install-wsl.sh            # 全流程
+sudo bash install-wsl.sh --with-frp # 顺带配好 frp 内网穿透
 ```
+
+阶段：`base → pyenv → torch → deps → model → svc → frp → verify`
+
+**注意**：如果你的 NVIDIA 驱动 < 520（例如 472.12 = CUDA 11.4），
+**不要装 cu121**，脚本默认走 `torch 2.0.1 + cu118`。
+原因、镜像选择、fairseq 编译坑、验收标准等完整说明见 **[docs/DEPLOY-WSL2.md](docs/DEPLOY-WSL2.md)**。
 
 ### 决策层 + 前端 (ECS)
 
@@ -157,8 +185,8 @@ nginx -t && systemctl reload nginx
 # ECS 上
 frps -c frps.toml  # bindPort = 7000
 
-# WSL2 上
-frpc -c frpc.toml  # serverAddr = ECS_IP, remotePort = 18081
+# WSL2 上（install-wsl.sh --with-frp 会自动生成并托管成 systemd 服务）
+frpc -c /etc/frp/frpc.toml  # serverAddr = ECS_IP, remotePort = 18081
 ```
 
 ECS 安全组需开放 7000 端口。

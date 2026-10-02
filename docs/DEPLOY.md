@@ -1,42 +1,46 @@
 # 部署指南
 
+> 本文档覆盖**决策层 + 前端 + frp**。
+> **推理层（WSL2）的部署另见 [DEPLOY-WSL2.md](./DEPLOY-WSL2.md)**，那里有一键脚本和完整踩坑记录。
+
 ## 前置条件
 
 - 一台 ECS (2C2G Debian)
 - 本机 WSL2 + NVIDIA GPU
-- Cloudflare 账号 + 域名 (zvi.onl)
-- 原项目模型文件 (F:\语音)
+- Cloudflare 账号 + 域名
+- 模型文件（约 3.4 GB，见 [README 模型文件下载](../README.md#模型文件下载)）
+- 本地 `.env`（`cp .env.example .env`，填 `API_TOKEN` 等）
+
+## 0. 敏感配置
+
+仓库不含真实密钥，全部走环境变量 / `.env`：
+
+| 变量 | 用途 |
+|---|---|
+| `API_TOKEN` | 决策层校验前端 `X-API-Token` 头；未设置时决策层拒绝启动 |
+| `INFERENCE_BASE_URL` | 决策层转发推理的地址（生产用 `http://localhost:18081`，即 frp 隧道出口） |
+| `ECS_IP` / `FRP_TOKEN` | 推理层 `install-wsl.sh` 配 frp 时用 |
+
+前端需要同一份 token，见 `frontend/js/config.example.js`。
 
 ## 1. 推理层 (WSL2)
 
 ```bash
-# 复制代码
-cp -r ai-cover/inference /opt/svc-inference
-
-# 安装 Python 3.10 + 依赖
-cd /opt/svc-inference
-python3.10 -m venv venv
-source venv/bin/activate
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-pip install fairseq soundfile librosa pyworld flask flask-cors
-
-# 复制模型文件 (从原项目)
-# 见 docs/DEPLOY.md 末尾模型清单
-
-# 启动
-source venv/bin/activate
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-python3 server.py
+cd inference/
+sudo bash install-wsl.sh              # 一键：依赖 → Python 3.10 → torch → fairseq → 模型 → systemd
+sudo bash install-wsl.sh --with-frp   # 再顺带配好 frp 隧道
 ```
+
+详细说明、驱动/torch 版本选择、fairseq 编译坑见 **[DEPLOY-WSL2.md](./DEPLOY-WSL2.md)**。
 
 ## 2. 决策层 (ECS)
 
 ```bash
 # 上传代码
-scp -r ai-cover/decision root@8.134.50.67:/opt/svc-decision/
+scp -r ai-cover/decision root@<ECS_IP>:/opt/svc-decision/
 
 # SSH 到 ECS
-ssh root@8.134.50.67
+ssh root@<ECS_IP>
 cd /opt/svc-decision
 bash deploy.sh
 ```
@@ -44,8 +48,8 @@ bash deploy.sh
 ## 3. 前端 (ECS Nginx)
 
 ```bash
-scp -r ai-cover/frontend/* root@8.134.50.67:/var/www/ai-cover/
-ssh root@8.134.50.67
+scp -r ai-cover/frontend/* root@<ECS_IP>:/var/www/ai-cover/
+ssh root@<ECS_IP>
 cp nginx.conf /etc/nginx/sites-available/svc-decision
 nginx -t && systemctl reload nginx
 ```
@@ -56,20 +60,21 @@ nginx -t && systemctl reload nginx
 # ECS 上: frps
 ./frps -c frps.toml
 
-# WSL2 上: frpc
-./frpc -c frpc.toml
+# WSL2 上: frpc（install-wsl.sh 的 frp 阶段会自动生成 /etc/frp/frpc.toml 并托管）
+./frpc -c /etc/frp/frpc.toml
 ```
 
 ## 5. 域名 (Cloudflare)
 
-- DNS: A 记录 `music-ai` → `8.134.50.67`, proxied
+- DNS: A 记录指向 ECS 公网 IP, proxied
 - SSL/TLS: Flexible 模式
 
 ---
 
 ## 模型文件清单
 
-从 `F:\语音` 复制以下文件到 WSL2 `/opt/svc-inference/`:
+模型约 3.4 GB，从 [README 的云盘链接](../README.md#模型文件下载) 下载后解压到 `inference/`，
+`install-wsl.sh` 的 `model` 阶段会把它们同步到 `/opt/svc-inference/`：
 
 | 文件 | 大小 | 路径 |
 |------|------|------|

@@ -1,0 +1,31 @@
+# ============================================================
+# AI 翻唱 推理层 —— Linux / WSL2 真实推理依赖
+# 适用于 so-vits-svc 4.0 推理管线（server.py + svc_engine.py）
+#
+# 注意：torch / fairseq 不在这里指定版本，由 install-wsl.sh 单独安装
+#       （torch 需要走 CUDA wheel 源，fairseq 需要 --no-build-isolation）
+# ============================================================
+
+# ---- 音频 I/O ----
+soundfile==0.12.1
+librosa==0.10.1
+numpy==1.24.3
+scipy==1.10.1
+pyyaml
+tqdm
+
+# ---- 绘图 ---- 
+# vdecoder/hifigan/utils.py、vdecoder/utils.py、utils.py 在 import 阶段就 import matplotlib，
+# 只做 log/存频谱图用，但漏装会直接 ModuleNotFoundError 起不来
+matplotlib
+
+# ---- F0 提取（svc_engine 用 f0_predictor="pm"）----
+praat-parselmouth
+pyworld
+
+# ---- 聚类（cluster/__init__.py 在 import 阶段就需要 sklearn）----
+scikit-learn
+
+# ---- Web 服务 ----
+flask==3.0.0
+flask-cors==4.0.0

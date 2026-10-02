@@ -130,6 +130,9 @@
     </footer>
 
     <div class="toast-container" id="toastContainer"></div>
+    <!-- 本地敏感配置（不入库）：照 js/config.example.js 建一个 js/config.js，
+         写上 apiToken（须与决策层 API_TOKEN 一致）。缺失时 /api/* 会返回 401。 -->
+    <script src="js/config.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

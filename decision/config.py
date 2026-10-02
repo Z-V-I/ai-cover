@@ -1,13 +1,45 @@
 """
 决策层配置文件
+
+注意：本文件不含任何真实密钥。所有敏感项都从环境变量读取
+（仓库根目录的 `.env` 会被自动加载，见下方 _load_dotenv）。
+复制 `.env.example` 为 `.env` 填入自己的值即可。
 """
 
 import os
+import sys
+
+
+def _load_dotenv() -> None:
+    """若仓库根目录存在 .env，则把里面的 K=V 注入环境变量（不覆盖已存在的）。"""
+    env_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
+    )
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 
 # ============================================
 # API 安全
 # ============================================
-API_TOKEN = os.environ.get("API_TOKEN", "aicover-api-key-2026")
+API_TOKEN = os.environ.get("API_TOKEN", "").strip()
+if not API_TOKEN:
+    sys.stderr.write(
+        "\n[启动中止] 环境变量 API_TOKEN 未设置。\n"
+        "  决策层用它校验前端请求头 X-API-Token；留空会让校验形同虚设，因此拒绝启动。\n"
+        "  解决：cp .env.example .env 并填入随机串，或直接 export API_TOKEN='...'\n"
+        "  生成随机串：python3 -c \"import secrets; print(secrets.token_urlsafe(32))\"\n\n"
+    )
+    raise SystemExit(1)
 
 # ============================================
 # 并发控制

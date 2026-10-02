@@ -4,7 +4,9 @@
 
 const API_BASE = window.API_BASE || '';
 const POLL_INTERVAL = 2000;
-const API_TOKEN = 'aicover-api-key-2026';
+// API Token 不写死在源码里：由 js/config.js 注入（该文件已在 .gitignore 中）。
+// 照着 js/config.example.js 建一个 config.js，填上与决策层 API_TOKEN 相同的值。
+const API_TOKEN = (window.APP_CONFIG && window.APP_CONFIG.apiToken) || '';
 
 function apiFetch(url, options = {}) {
     options.headers = options.headers || {};

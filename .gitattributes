@@ -1,3 +1,7 @@
 *.pth filter=lfs diff=lfs merge=lfs -text
 *.pt filter=lfs diff=lfs merge=lfs -text
 pretrain/nsf_hifigan/* filter=lfs diff=lfs merge=lfs -text
+
+# shell 脚本必须以 LF 检出：CRLF 会让 WSL/Linux 下的 bash 报
+# "/usr/bin/env bash^M: bad interpreter" 或 "\r: command not found"
+*.sh text eol=lf
