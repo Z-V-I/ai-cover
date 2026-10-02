@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 翻唱 - So-VITS-SVC</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    <link rel="stylesheet" href="css/style.css">
+    <!-- ?v=<文件内容哈希> 是「缓存击穿」用的：浏览器对没有 Cache-Control 的老响应会按
+         启发式缓存（10% × (现在 − Last-Modified)），本次改动前 app.js 的 Last-Modified
+         还是 7 月 30 日，等价于允许缓存约 6 天，用户浏览器根本不会来问要不要更新。
+         改 URL 是唯一可靠的办法。改完 js/css 后记得同步更新这里的哈希。 -->
+    <link rel="stylesheet" href="css/style.css?v=6f4d4f6a">
     <script type="text/javascript">
         (function(c,l,a,r,i,t,y){
             c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
@@ -132,7 +136,7 @@
     <div class="toast-container" id="toastContainer"></div>
     <!-- 本地敏感配置（不入库）：照 js/config.example.js 建一个 js/config.js，
          写上 apiToken（须与决策层 API_TOKEN 一致）。缺失时 /api/* 会返回 401。 -->
-    <script src="js/config.js"></script>
-    <script src="js/app.js"></script>
+    <script src="js/config.js?v=88a63d10"></script>
+    <script src="js/app.js?v=753feeba"></script>
 </body>
 </html>
