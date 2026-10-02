@@ -162,6 +162,14 @@ function handleFile(file) {
     $('#uploadArea').style.display = 'none';
     hideError(); hideDownloadSection();
     updateSubmitButton();
+
+    // 选完立刻读 1KB 探一下：安卓从系统文件选择器拿到的往往只是一个临时
+    // 授权引用，授权失效时文件内容根本读不出来。早发现就能早提示，
+    // 不至于让用户选好音色、调好音高、点了提交才弹"网络错误"。
+    file.slice(0, 1024).arrayBuffer().catch(() => {
+        showToast('这个文件读不出来，请重新选择（建议先把文件另存到手机"下载"目录）', 'error');
+        removeFile();
+    });
 }
 
 function removeFile() {
@@ -188,32 +196,85 @@ function updateSubmitButton() {
     $('#btnSubmit').disabled = !(appState.selectedModel && appState.selectedFile);
 }
 
+/**
+ * 用 XHR 而不是 fetch 上传。
+ * 两个理由：
+ *  1. 只有 XHR 能拿到上传进度 —— 手机上"到底传没传出去"一目了然；
+ *  2. fetch 失败时只给一句 TypeError: Failed to fetch，服务端又没有任何
+ *     日志，根本分不清是"文件读不出来"还是"网络断了"。XHR 能把这两种
+ *     情况区分开（status 0 + error 事件 vs onload 拿到真实状态码）。
+ */
+function uploadWithProgress(fd, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', API_BASE + '/api/upload', true);
+        xhr.setRequestHeader('X-API-Token', API_TOKEN);
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => resolve(xhr);
+        xhr.onerror = () => { const e = new Error('上传连接被中断或无法建立'); e.name = 'NetworkError'; reject(e); };
+        xhr.ontimeout = () => { const e = new Error('上传超时'); e.name = 'TimeoutError'; reject(e); };
+        xhr.onabort = () => { const e = new Error('上传被取消'); e.name = 'AbortError'; reject(e); };
+        xhr.send(fd);
+    });
+}
+
+function parseXhrResponse(xhr) {
+    const ct = (xhr.getResponseHeader('content-type') || '').toLowerCase();
+    let data = null;
+    if (ct.includes('application/json')) {
+        try { data = JSON.parse(xhr.responseText); } catch (e) { data = null; }
+    }
+    if (xhr.status === 429) {
+        const e = new Error('排队人数已满或请求过于频繁，请稍后再试。');
+        e.status = 429; throw e;
+    }
+    if (xhr.status === 413) {
+        const e = new Error((data && data.error) || '文件超过服务器允许的大小，请换更短的音频。');
+        e.status = 413; throw e;
+    }
+    if (xhr.status >= 200 && xhr.status < 300) {
+        if (data) return data;
+        const e = new Error(`服务返回异常（HTTP ${xhr.status}）`);
+        e.status = xhr.status; throw e;
+    }
+    const e = new Error((data && data.error) || `服务返回异常（HTTP ${xhr.status}）`);
+    e.status = xhr.status; throw e;
+}
+
 async function submitTask() {
     if (!appState.selectedFile || !appState.selectedModel) return;
     hideError(); hideDownloadSection();
 
     const btn = $('#btnSubmit');
     btn.disabled = true;
-    btn.textContent = '提交中...';
+    btn.textContent = '准备中...';
 
     setStage('stageUpload', 'active');
 
-    const fd = new FormData();
-    fd.append('audio', appState.selectedFile);
-    fd.append('voice_model', appState.selectedModel);
-    fd.append('pitch_shift', $('#pitchSlider').value);
-
     try {
-        const res = await apiFetch('/api/upload', { method: 'POST', body: fd });
+        // ⚠ 先把文件读进内存，再上传。
+        // 手机（尤其安卓）从系统文件选择器拿到的 File 往往只是一个
+        // content:// 临时授权引用：如果这个引用在选完之后失效（切了下 App、
+        // 文件在云盘/微信目录里、系统回收过授权），浏览器读不到内容，
+        // 请求会在发出前就失败 —— 服务端一条日志都没有，前端只弹"网络错误"。
+        // 先 arrayBuffer() 读成内存 Blob，既能在读取阶段就给出准确原因，
+        // 也让实际上传不再依赖那个临时授权。
+        btn.textContent = '读取文件...';
+        const buf = await appState.selectedFile.arrayBuffer();
+        const blob = new Blob([buf], { type: appState.selectedFile.type || 'application/octet-stream' });
 
-        // 先判状态码再解析 body：429 时 nginx 返回的是 HTML 错误页，
-        // 原来直接 `await res.json()` 会先抛异常，导致下面那个 429 分支
-        // 永远走不到，用户只会看到笼统的"网络错误"。
-        if (res.status === 429) {
-            showError('排队人数已满或请求过于频繁，请稍后再试。');
-            resetSubmitBtn(); setStage('stageUpload', ''); return;
-        }
-        const data = await readJson(res);
+        const fd = new FormData();
+        fd.append('audio', blob, appState.selectedFile.name);
+        fd.append('voice_model', appState.selectedModel);
+        fd.append('pitch_shift', $('#pitchSlider').value);
+
+        btn.textContent = '上传中 0%';
+        const xhr = await uploadWithProgress(fd, (pct) => {
+            btn.textContent = pct < 100 ? `上传中 ${pct}%` : '排队中...';
+        });
+        const data = parseXhrResponse(xhr);
 
         appState.currentTaskId = data.task_id;
         setStage('stageUpload', 'done');
@@ -231,9 +292,14 @@ async function submitTask() {
 
         startPolling();
     } catch (e) {
-        // readJson 抛出的是后端返回的 error 文本；纯网络层错误没有 status
+        // readJson / parseXhrResponse 抛出的是后端返回的 error 文本；纯网络层错误没有 status
         if (e.status === 413) { showError(e.message); removeFile(); resetSubmitBtn(); setStage('stageUpload', ''); return; }
-        showError(e.status ? e.message : '网络错误，请检查连接后重试。');
+        if (e.name === 'NotReadableError' || /could not be read|读取/i.test(e.message || '')) {
+            showError('无法读取这个音频文件：手机给网页的临时授权已失效。请重新点"选择音频文件"再选一次；若仍不行，先把文件另存到手机"下载"或"音乐"目录后再选。');
+        } else {
+            // 把真实原因带出来，别再让用户只看到一句笼统的"网络错误"
+            showError(`网络错误：${e.message || e.name || '未知原因'}。请确认手机网络正常后重试。`);
+        }
         resetSubmitBtn();
         setStage('stageUpload', '');
     }
