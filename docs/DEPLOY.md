@@ -54,6 +54,11 @@ cp nginx.conf /etc/nginx/sites-available/svc-decision
 nginx -t && systemctl reload nginx
 ```
 
+> ⚠ **限流别配太严**。`nginx.conf` 里现在是 `rate=20r/s burst=40`。
+> 如果照搬某些"安全加固"教程配成 1 请求/秒，前端轮询自身就有约 1.1 请求/秒，
+> 会把自己的访客 IP 打进 429，表现为"一直提示离线、语音列表加载不出来"。
+> 改完务必确认 429 返回的是 JSON 而不是 nginx 默认的 HTML 错误页。
+
 ## 4. frp 穿透 (打通 ECS ↔ WSL2)
 
 ```bash

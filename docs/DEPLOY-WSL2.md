@@ -229,18 +229,169 @@ PY
 
 ---
 
-## 4. 开机自启
+## 4. 保活（这一步不做，服务一定会掉）
 
-WSL 发行版不会随 Windows 启动而启动，所以用启动文件夹 + `.vbs` 拉起：
+### 真正的根因：`instanceIdleTimeout` 默认只有 15 秒
 
-```vbs
-ws.Run "wsl.exe -d <发行版名> -u root -- systemctl start svc-inference", 0, False
+WSL2 有两个极容易混淆的「空闲回收」键，都在 `%UserProfile%\.wslconfig`：
+
+| 键 | 段 | 默认值 | 管什么 |
+|---|---|---|---|
+| `instanceIdleTimeout` | `[general]` | **15000 ms（15 秒）** | 发行版空闲多久被 shutdown |
+| `vmIdleTimeout` | `[wsl2]` | 60000 ms（60 秒） | 虚拟机（VM）空闲多久被回收 |
+
+**元凶是第一个。** 发行版空闲 15 秒就被 shutdown，里面的 systemd 服务
+（`svc-inference`、`frpc`）随之全部停止，frp 隧道断开，网页报
+**「无法连接到推理服务，请检查服务是否启动」**。
+
+所以在 systemd 里 `enable` 服务**完全解决不了问题**：服务不是自己挂了，
+是整台发行版被收走了。
+
+日志特征（一眼认出来）：
+
+```bash
+journalctl -u svc-inference -n 30 --no-pager
 ```
 
-把 `inference/wsl-autostart.vbs` 放到 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`
-（Win+R 输入 `shell:startup` 直接打开该目录），并确认里面的发行版名与 `wsl -l -v` 一致。
+```
+12:50:15 Started svc-inference...       ← 每次只活 16 秒
+12:50:31 Stopping svc-inference...
+12:52:15 Started svc-inference...
+12:52:31 Stopping svc-inference...
+```
 
-`svc-inference` 在 systemd 里已经是 `enabled`，vbs 里再 `start` 一次只是保险（已运行时为 no-op）。
+```bash
+journalctl -b --no-pager | grep 'power off'
+```
+
+```
+12:50:31 systemd-logind: The system will power off now!    ← 决定性证据
+```
+
+⚠️ 对照：那一瞬间 `systemctl is-active svc-inference` 往往还返回 `active`
+（服务确实起来了，只是马上要被收走），**只看 `is-active` 会被骗**。
+
+### 修复
+
+```ini
+# %UserProfile%\.wslconfig
+[general]
+instanceIdleTimeout=-1          # -1 = 永不自动关闭
+
+[wsl2]
+vmIdleTimeout=604800000         # 7 天，等于不自动回收
+```
+
+改完必须 `wsl --shutdown` 重启 WSL 才生效。
+
+> **只改 `[wsl2] vmIdleTimeout` 是没用的** —— 这是最容易踩的坑。
+> 发行版被回收之后虚拟机才跟着回收，只延长虚拟机的超时等于没改。
+
+### 验证（严格做法）
+
+不能只看 `is-active`。用 `boot_id` 判断发行版有没有被重启过：
+
+```bash
+# 1) 启动一次，记下 boot_id，随后立刻断开会话
+wsl -d Ubuntu -u root -- bash -c "cat /proc/sys/kernel/random/boot_id"
+
+# 2) 什么都不做，静置 90 秒以上（期间不要执行任何 wsl 命令！）
+
+# 3) 再查一次
+wsl -d Ubuntu -u root -- bash -c "cat /proc/sys/kernel/random/boot_id; systemctl show svc-inference -p ActiveEnterTimestamp"
+```
+
+`boot_id` 不变、`ActiveEnterTimestamp` 仍是最初那一刻 → 没被回收，修好了。
+
+> 实测对比：修复前 `boot_id` 每 2 分钟变一次、服务每 16 秒重启一次、每个 boot
+> 里有 1 次 `will power off`；修复后静置 90 秒，`boot_id` 不变、服务只启动过 1 次、
+> `will power off` 计数为 0。
+
+### Windows 侧：计划任务（负责「登录后把发行版踢起来」+ 兜底）
+
+`.wslconfig` 修好后虚拟机不会再被空闲回收，但**Windows 登录后如果没人碰过 WSL，
+发行版根本不会启动**。所以还需要一个计划任务：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-wsl-keepalive.ps1
+```
+
+它会做三件事：
+
+1. 修正 `.wslconfig`（先备份原文件），保证上面两个键正确
+2. 把隐藏窗口的启动脚本放到 `%LOCALAPPDATA%\ai-cover\wsl-autostart.vbs`
+3. 注册任务 `AI-Cover Inference Guard`：**登录时 + 每 2 分钟**执行
+   `systemctl start svc-inference frpc`（幂等，不会重启已在跑的服务）
+
+验证：
+
+```powershell
+Get-ScheduledTask -TaskName "AI-Cover*" | Select TaskName,State
+Get-ScheduledTaskInfo -TaskName "AI-Cover Inference Guard" | Select LastTaskResult,NextRunTime
+Get-Content "$env:LOCALAPPDATA\ai-cover\keepalive.log" -Tail 5
+```
+
+`NextRunTime` 必须有值；`keepalive.log` 每次运行追加一行 `ok`。
+
+### 实录：保活踩过的坑
+
+**坑 1：计划任务直接跑 `wsl.exe` 会闪黑窗。**
+
+改用一个 `.vbs` 壳，以 `WshShell.Run(cmd, 0, True)`（window style `0` = 隐藏）调起。
+`wscript.exe` 本身是 GUI 程序，不分配控制台，因此完全无窗口。任务动作写成
+`wscript.exe //nologo "<shim>.vbs"`。
+
+**坑 2：`.vbs` 带中文注释必须存成 UTF-16LE + BOM。**
+
+wscript 默认按 ANSI 解读 `.vbs`，UTF-8 中文会乱码，甚至可能把脚本解析坏。
+`setup-wsl-keepalive.ps1` 会自动做这个转换。
+
+**坑 3：`.ps1` 带中文必须存成 UTF-8 *带* BOM。**
+
+PowerShell 5.1 对**无 BOM** 的 `.ps1` 按 ANSI 读取，中文变乱码后语法直接崩，
+报错是莫名其妙的「表达式或语句中包含意外的标记 "}"」。
+反过来，**`.sh` 千万不要加 BOM**，否则 bash 报 `bad interpreter`。
+（批量改编码时别把 `.sh` 和 `.ps1` 一起处理。）
+
+**坑 3.5：读写 UTF-8 配置一律别用 `Get-Content`。**
+
+PowerShell 5.1 的 `Get-Content` 按 ANSI 读 UTF-8 **无 BOM** 文件，中文乱码时
+**会连带吞掉换行、把相邻两行并成一行**（实测），于是 `^\s*key=` 这类行首匹配会
+静默失效 —— 表现为"配置明明写了却读不到"。一律改用
+`[System.IO.File]::ReadAllLines / ReadAllText / WriteAllText`。
+
+**坑 4：只在 `LogonTrigger` 上挂 `Repetition` 不会重复。**
+
+导出的 XML 里明明有 `<Repetition><Interval>PT2M</Interval>`，但 `NextRunTime` 是空的，
+任务在同一次登录会话内根本不会自动跑。必须**另外**加一个 `TimeTrigger`：
+
+```powershell
+$t1 = New-ScheduledTaskTrigger -AtLogOn -User $user
+$t2 = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+        -RepetitionInterval (New-TimeSpan -Minutes 2)
+Register-ScheduledTask ... -Trigger @($t1, $t2) -Force
+```
+
+**坑 5：WSL2 的所有发行版共享同一个虚拟机。**
+
+机器上别的发行版（比如 Debian）在跑东西时，会顺带把 Ubuntu 的虚拟机"保活"，
+让问题表现得时有时无、难以复现。**别把保活建立在别人的活动上** —— 那种活动一停，
+你的服务照样掉。
+
+### 历史方案（已废弃）
+
+早期版本用了一个 `AI-Cover WSL Anchor` 任务，常驻 `wsl.exe -d Ubuntu -u root -- sleep infinity`
+顶住一个会话。它在 `.wslconfig` 没修好的前提下确实有效（实测能撑 10 分钟），
+但那是治标 —— 根因既然是 `instanceIdleTimeout`，就应该改配置。
+`setup-wsl-keepalive.ps1` 会自动移除这个旧任务。
+
+### 备选方案（没有权限创建计划任务时）
+
+`inference/wsl-autostart.vbs` 本身就是一个可独立使用的隐藏脚本 —— 放进启动文件夹
+（Win+R 输入 `shell:startup`）即可，登录时执行一次，不依赖管理员权限。
+它与计划任务功能重叠，**不要同时启用**。
+
+> 本机休眠 / 关机 / 未登录 Windows 期间服务必不可用 —— 这是 WSL2 方案的固有限制。
 
 ---
 
@@ -291,6 +442,9 @@ systemctl is-active svc-inference frpc
 
 | 现象 | 真因 |
 |---|---|
+| 前端报「无法连接到推理服务」但 `systemctl is-active` 仍是 `active` | **发行版被 `instanceIdleTimeout`（默认 15 秒）回收了，不是服务挂了**。看 `journalctl -b \| grep 'power off'`，见第 4 节 |
+| 服务每十几秒就被起停一次 | 同上 —— 那是 WSL 关机留下的痕迹，改 `.wslconfig` 而不是去查服务本身 |
+| `systemctl is-active --quiet svc1 svc2` 一次传多个服务名 | **永远返回 0**（实测），判断服务存活必须逐个查 |
 | 上传接口返回空响应 / curl `code=000` | 本地 `-F "audio=@/tmp/xxx.wav"` 的文件被 tmpfiles 清掉了，**不是服务端问题** |
 | 服务起不来但日志无异常 | 漏装 `matplotlib` / `scikit-learn`，import 阶段就挂了 |
 | `wsl.exe` 传多行命令报 `syntax error near unexpected token` | Windows↔bash 层拆坏了参数，改成**先写 `.sh` 文件再执行** |

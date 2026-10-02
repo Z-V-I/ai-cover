@@ -125,13 +125,78 @@ grep -oE "[\"'](fairseq|examples)/[^\"']+\.(cpp|c|pyx|cu)[\"']" setup.py | tr -d
 
 其余：`Restart=always`、`StandardOutput=append:/var/log/<svc>.log`。
 
-### WSL 开机自启
-WSL 发行版不会随着 Windows 启动。用启动文件夹 + .vbs：
-```vbs
-ws.Run "wsl.exe -d <真实发行版名> -u root -- systemctl start <svc>", 0, False
+### 保活（**必做，否则服务一定会掉**）
+
+**根因：`.wslconfig` 里 `[general] instanceIdleTimeout` 默认只有 15000 ms（15 秒）。**
+发行版空闲 15 秒就被 shutdown，里面的 systemd 服务随之全停 —— 服务不是自己挂了，
+是整台发行版被收走了。所以 `systemd` 里 `enable` **完全解决不了这个问题**。
+
+两个键极易搞混（都在 `%UserProfile%\.wslconfig`）：
+
+| 键 | 段 | 默认 | 管什么 |
+|---|---|---|---|
+| `instanceIdleTimeout` | `[general]` | **15000 ms** | 发行版空闲多久被 shutdown ← **元凶** |
+| `vmIdleTimeout` | `[wsl2]` | 60000 ms | 虚拟机（VM）空闲多久被回收 |
+
+```ini
+[general]
+instanceIdleTimeout=-1        # -1 = 永不自动关闭
+[wsl2]
+vmIdleTimeout=604800000
 ```
-放 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`。
-**验证方法**：`wsl --shutdown` → `wsl -d <distro> -u root -- /bin/true` → 等 ~30s → 检查 `systemctl is-active`。服务是 enabled 就会自动回来。
+
+改完必须 `wsl --shutdown` 才生效。
+**只改 `[wsl2] vmIdleTimeout` 是没用的** —— 发行版被回收后 VM 才跟着回收，这是最容易踩的坑。
+
+**症状判据**（三条一起看，少看一条容易被骗）：
+- `journalctl -u <svc>` 里出现密集的 `Stopping/Stopped`，且每次只活十几秒；
+- `journalctl -b --no-pager | grep 'power off'` 有 `systemd-logind: The system will power off now!`
+  —— **决定性证据**；
+- ⚠️ 那一瞬间 `systemctl is-active <svc>` 往往仍返回 `active`，**只看 is-active 会被骗**。
+
+**严格验证**（不能靠 is-active，要用 `boot_id`）：
+
+```bash
+wsl -d <distro> -u root -- bash -c "cat /proc/sys/kernel/random/boot_id"
+# 之后什么都别做，静置 90 秒以上（期间不要执行任何 wsl 命令！）
+wsl -d <distro> -u root -- bash -c "cat /proc/sys/kernel/random/boot_id; systemctl show <svc> -p ActiveEnterTimestamp"
+```
+
+`boot_id` 不变、`ActiveEnterTimestamp` 仍是最初那一刻 → 没被回收。
+实测对比：修复前 `boot_id` 每 2 分钟变一次、服务每 16 秒重启一次；修复后静置 90 秒
+`boot_id` 不变、服务只启动过 1 次、`power off` 计数为 0。
+
+**Windows 侧计划任务（只负责「登录后把发行版踢起来」+ 兜底）**：
+`.wslconfig` 修好后 VM 不会再被空闲回收，但 Windows 登录后如果没人碰过 WSL，
+发行版根本不会启动。脚本见 `scripts/setup-wsl-keepalive.ps1`，注册一个任务：
+登录时 + 每 2 分钟执行 `systemctl start <svc...>`（幂等，不会重启已在跑的服务）。
+
+**四个必踩的坑**：
+
+1. **计划任务直接跑 `wsl.exe` 会闪黑窗**。用 `.vbs` 壳以
+   `WshShell.Run(cmd, 0, True)`（window style `0`）调起 —— `wscript.exe` 是 GUI 程序，
+   不分配控制台。任务动作写 `wscript.exe //nologo "<shim>.vbs"`。
+2. **编码（每种文件各不相同，全踩过）**：
+   - `.vbs` 带中文 → 必须 **UTF-16LE + BOM**（wscript 默认按 ANSI 读，UTF-8 会乱码甚至解析崩）
+   - `.ps1` 带中文 → 必须 **UTF-8 *带* BOM**（PowerShell 5.1 对无 BOM 的 .ps1 按 ANSI 读，
+     中文乱码后语法直接崩，报「表达式或语句中包含意外的标记 "}"」）
+   - `.sh` → **绝对不能有 BOM**，否则 `bad interpreter`
+   - `.wslconfig` → UTF-8 **无** BOM + **LF**（有 BOM 会让 WSL 静默忽略整个文件；
+     CRLF 可能让值被读成 `-1\r`）
+3. **`LogonTrigger` 上挂 `Repetition` 不会真正重复**。XML 里明明有
+   `<Repetition><Interval>PT2M</Interval>`，但 `NextRunTime` 为空，同一次登录内根本不跑。
+   **必须额外加 `TimeTrigger(-Once)` 带 Repetition**。
+4. **WSL2 所有发行版共享同一个 VM**。机器上别的发行版（如 Debian 跑 docker）会顺带保活你的 VM ——
+   **别把保活建立在别人的活动上**，那种活动一停服务照样掉。
+
+**已废弃的历史方案**：一个常驻 `wsl.exe -d <distro> -u root -- sleep infinity` 的「锚点」任务
+（靠顶住一个活跃会话阻止回收）。它在 `.wslconfig` 没修好的前提下确实有效（实测能撑住），
+但那是治标 —— 根因既然是 `instanceIdleTimeout`，就应当改配置。
+`setup-wsl-keepalive.ps1` 会自动移除这个旧任务。
+
+**备选**（无权限建计划任务时）：启动文件夹 + `scripts/wsl-autostart.vbs`（隐藏窗口，
+登录时执行一次）。缺点：受限环境里 `wscript` 会被当 LOLBin 拦下，**无法自动化测试**。
+与计划任务**不要同时启用**。
 
 ### frp 反代（本机推理 → 云端决策层）
 ```toml
@@ -151,6 +216,23 @@ remotePort = 18081
 - **云端 `remotePort` 不通公网是正常的**：决策层在 ECS 上用 `localhost:18081` 访问，不需要安全组放行 18081。
 - 客户端连上的日志特征：`login to server success` + `start proxy success`。
 
+**开 debug 日志时注意位置**：`log.to` / `log.level` 必须写在 `[[proxies]]` **之前**。
+写在后面会被 TOML 当成 proxy 的字段 → `unmarshal ProxyConfig error: json: unknown field "log"`
+→ 服务每 5 秒无限重启。正确写法：
+
+```toml
+log.to = "console"
+log.level = "debug"
+
+serverAddr = "..."
+[[proxies]]
+...
+```
+
+**别把 frpc 周期性重连当独立故障**：`try to connect to server...` 每隔 1~2 分钟出现一次，
+在**刚重启过 frpc / 执行过 `wsl --shutdown`** 之后是正常的 —— frps 要等心跳超时（默认 90s）
+才清理旧连接，几轮后才收敛。静置观察 4 分钟，重连次数归零即正常。
+
 ## 7. 密钥与配置（公开仓库尤其注意）
 
 - 部署脚本里**只留占位默认值**，真实值（`ECS_IP`、`FRP_TOKEN`、`API_TOKEN`）放仓库根的 `.env`，并把 `.env` 加进 `.gitignore`，同时提供 `.env.example` 模板。
@@ -167,6 +249,8 @@ remotePort = 18081
 4. **确认不是直通**：`md5sum 输入 输出` 必须不同；`np.abs(in-out).mean()` 量级应与音频 RMS 相当
 5. `wsl --shutdown` 冷启后自动恢复
 6. **公网端到端**：从前端 API 上传 → 轮询任务状态 → 下载结果，全链路 200
+7. **保活验收（必做，否则前面全白干）**：静置 90 秒不碰 WSL，`boot_id` 不变、
+   `journalctl -b | grep 'power off'` 计数为 0 —— 详见 6. 保活
 
 ## 9. 常见误判
 
@@ -176,8 +260,17 @@ remotePort = 18081
 | 轮询脚本显示 "FINISHED" 但任务还在跑 | 匹配到了历史运行的 EXITMARK |
 | 编译报缺文件 | PyPI sdist 漏打包，不是网络问题 |
 | 服务起不来但日志无异常 | 漏装 `matplotlib` / `scikit-learn`，import 阶段就挂了 |
+| 前端报"无法连接到推理服务"但 `is-active` 仍是 active | **发行版被 `instanceIdleTimeout`（默认 15 秒）回收了，不是服务挂了** —— 看 `journalctl -b \| grep 'power off'`（见 6. 保活）。只看 `is-active` 一定被骗 |
+| 服务每十几秒被起停一次 | 同上，那是 WSL 关机留下的痕迹，**去改 `.wslconfig`，别去查服务** |
+| 判断服务状态返回"全都正常" | `systemctl is-active --quiet svc1 svc2` 一次传多个服务名**会失效**（某个没跑也返回 0）。必须逐个查：active→0、inactive→3、不存在→4 |
+| frpc 每 1~2 分钟重连一次 | 刚重启过 frpc / `wsl --shutdown` 后的正常收敛过程，静置 4 分钟归零即可，**不是 frps 故障** |
+| `.ps1` 带中文报「意外的标记 "}"」 | 文件是 **UTF-8 无 BOM**，PowerShell 5.1 按 ANSI 读导致中文乱码破坏语法。存成 UTF-8 **带** BOM（`.sh` 反过来绝不能有 BOM） |
+| `.wslconfig` 写了键却不生效 | 文件带了 BOM 或 CRLF —— WSL 会静默忽略整个文件。必须 UTF-8 无 BOM + LF |
+| `Get-Content` 读配置文件后行首匹配不到 / 输出为空 | PowerShell 5.1 的 `Get-Content` 按 ANSI 读 UTF-8 **无 BOM** 文件，中文乱码时**会连带吞掉换行、把相邻两行并成一行**（实测），于是 `^\s*key=` 匹配失效。读写这类文件一律用 `[System.IO.File]::ReadAllLines / ReadAllText / WriteAllText` |
 
 ## 附：脚本
 
 - `scripts/install-wsl.sh` —— 分阶段一键安装（可直接改用）
 - `scripts/scan-imports.py` —— 扫源码里缺失的第三方模块
+- `scripts/setup-wsl-keepalive.ps1` —— **部署完必跑**：修正 `.wslconfig`（`instanceIdleTimeout=-1`）+ 注册隐藏窗口的保活计划任务
+- `scripts/wsl-autostart.vbs` —— 隐藏窗口拉起脚本；无计划任务权限时可单独放进启动文件夹

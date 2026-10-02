@@ -116,7 +116,8 @@ ai-cover/
 │   ├── requirements-linux.txt  # Linux 真实推理依赖清单
 │   ├── start_server.sh    # 推理层启动脚本
 │   ├── autostart.sh       # WSL2 开机自启
-│   └── wsl-autostart.vbs  # Windows 开机自启（启动文件夹）
+│   ├── setup-wsl-keepalive.ps1 # ★ Windows 侧保活：改 .wslconfig + 建计划任务
+│   └── wsl-autostart.vbs  # 隐藏窗口拉起脚本（计划任务调用 / 也可放启动文件夹）
 ├── skills/                # 可复用的 WorkBuddy Skill
 │   └── wsl2-audio-inference-deploy/
 ├── docs/

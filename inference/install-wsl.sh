@@ -529,6 +529,30 @@ PY
     return 1
   fi
 
+  # ---- 保活自检 ----------------------------------------------------------
+  # WSL 的 [general] instanceIdleTimeout 默认 15000ms：发行版空闲 15 秒就被
+  # shutdown，svc-inference / frpc 全停，前端报「无法连接到推理服务」。
+  # 注意这是 [general] 段，不是 [wsl2] vmIdleTimeout（那个只管虚拟机）。
+  echo
+  say "检查保活配置（WSL 默认空闲 15 秒就回收发行版，不处理会一直掉线）"
+  # 不依赖 Windows 互操作（部分环境 WSLInterop 被禁），直接扫 /mnt/c/Users/*/.wslconfig
+  local cfg="" c v
+  for c in /mnt/c/Users/*/.wslconfig; do
+    [ -f "$c" ] || continue
+    v=$(grep -iE '^[[:space:]]*instanceIdleTimeout[[:space:]]*=' "$c" 2>/dev/null | tail -1)
+    if [ -n "$v" ]; then cfg="$c"; break; fi
+  done
+  if [ -n "$cfg" ] && echo "$v" | grep -qiE '=[[:space:]]*(-1|[1-9][0-9]{5,})[[:space:]]*$'; then
+    ok "保活已配置：$v  （$cfg）"
+  else
+    warn "保活未配置！发行版空闲 15 秒就会被 shutdown，服务会反复掉线。"
+    echo "     在 Windows 侧执行一次即可（会同时建好无窗口的保活计划任务）："
+    echo "         powershell -ExecutionPolicy Bypass -File inference/setup-wsl-keepalive.ps1 -RestartWsl"
+    echo "     或手动写 ${cfg:-%UserProfile%\\.wslconfig}："
+    echo "         [general]"
+    echo "         instanceIdleTimeout=-1"
+  fi
+
   echo
   ok "全部完成。"
   echo "     本机： curl http://localhost:8081/api/health"
